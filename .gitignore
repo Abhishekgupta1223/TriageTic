@@ -1,0 +1,20 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+.env
+.DS_Store
+
+# Take-home brief — not for public distribution
+deriv_project.txt
+
+# Pipeline outputs (regenerated each run)
+preprocessed_tickets.json
+routing_decisions.json
+triage_results.json
+prediction_comparison.json
+evaluation_report.json
+confusion_summary.json
+llm_calls.jsonl
+llm_outputs/
