@@ -16,6 +16,11 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
+
+# Load .env from the project root before any module reads env vars.
+load_dotenv()
+
 from pipeline.classify import ParsedClassification, classify_ticket
 from pipeline.evaluate import confusion_summary, evaluation_report, per_ticket_comparison
 from pipeline.llm import DEFAULT_MODEL, LLMClient, LLMError

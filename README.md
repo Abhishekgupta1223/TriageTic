@@ -6,7 +6,18 @@ An AI-powered ticket triage pipeline that classifies customer support tickets, r
 
 ```bash
 pip install -r requirements.txt
-export ANTHROPIC_API_KEY=sk-ant-...
+cp .env.example .env
+# then open .env and paste your Anthropic API key
+```
+
+Get an API key at https://console.anthropic.com/.
+
+The pipeline loads `.env` automatically via `python-dotenv`. If you prefer
+not to use a `.env` file, export the variable directly instead:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...        # bash
+$env:ANTHROPIC_API_KEY = "sk-ant-..."      # PowerShell
 ```
 
 ## Run

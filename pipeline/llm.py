@@ -19,7 +19,8 @@ class LLMClient:
     def __init__(self, model: str = DEFAULT_MODEL) -> None:
         if not os.environ.get("ANTHROPIC_API_KEY"):
             raise LLMError(
-                "ANTHROPIC_API_KEY is not set. Export it before running the pipeline."
+                "ANTHROPIC_API_KEY is not set. Copy .env.example to .env and "
+                "paste your key, or export ANTHROPIC_API_KEY in your shell."
             )
         self.client = anthropic.Anthropic()
         self.model = model
