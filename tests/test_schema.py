@@ -77,3 +77,49 @@ def test_recovery_returns_none_when_no_json():
     payload, err = _try_parse("there is no json in this response at all")
     assert payload is None
     assert err is not None
+
+
+def test_recovery_handles_multiple_json_candidates():
+    """The OLD greedy regex `\\{.*\\}` would capture from the first `{` to the
+    LAST `}` and produce an unparseable blob. The new raw_decode walker must
+    return the first VALID JSON object regardless of surrounding noise.
+    """
+    # Two brace-prefixed strings; only the second is a valid JSON object.
+    noisy = (
+        "{this is not json}\n"
+        '{"category": "billing", "urgency": "high", "confidence": 0.9, '
+        '"reasoning_summary": "ok", "needs_human_review": false}\n'
+        "{some trailing prose}"
+    )
+    payload, _ = _try_parse(noisy)
+    assert payload is not None
+    assert payload["category"] == "billing"
+    assert payload["confidence"] == 0.9
+
+
+def test_recovery_picks_first_valid_when_multiple_objects():
+    """If multiple complete JSON objects appear, take the first."""
+    noisy = (
+        'prose {"category": "verification", "urgency": "low", "confidence": 0.5, '
+        '"reasoning_summary": "first", "needs_human_review": true} '
+        'more {"category": "billing", "urgency": "high", "confidence": 0.9, '
+        '"reasoning_summary": "second", "needs_human_review": false}'
+    )
+    payload, _ = _try_parse(noisy)
+    assert payload is not None
+    assert payload["reasoning_summary"] == "first"
+
+
+def test_recovery_handles_nested_braces():
+    """A JSON object whose VALUE contains braces (e.g. nested object string)
+    must still parse correctly — the old greedy regex could not distinguish
+    inner from outer braces in noisy text.
+    """
+    obj_with_nested = (
+        '{"category": "billing", "urgency": "high", "confidence": 0.8, '
+        '"reasoning_summary": "Customer said: {urgent} please help", '
+        '"needs_human_review": false}'
+    )
+    payload, _ = _try_parse(obj_with_nested)
+    assert payload is not None
+    assert "{urgent}" in payload["reasoning_summary"]

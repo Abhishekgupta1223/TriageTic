@@ -178,13 +178,19 @@ def validate(out_dir: Path) -> list[str]:
         ):
             if k not in call:
                 fail(f"llm_calls.jsonl[{i}]: missing field {k}")
-        if not Path(call["output_artifact"]).is_file():
-            fail(f"llm_calls.jsonl[{i}]: output_artifact does not exist: {call['output_artifact']}")
-    # Stage values should be the ones the spec calls out (we also allow our retry stage).
+        # Resolve against out_dir so relative paths stored by main.py work
+        # regardless of where validate.py is invoked from.
+        artifact_str = call["output_artifact"]
+        artifact = (out_dir / artifact_str) if not Path(artifact_str).is_absolute() else Path(artifact_str)
+        if not artifact.is_file():
+            fail(f"llm_calls.jsonl[{i}]: output_artifact does not exist: {artifact_str}")
+    # Stage values must match the spec exactly: "classification | reply_generation".
     stages_seen = {c["stage"] for c in calls}
-    expected = {"classification", "reply_generation"}
-    if not expected.issubset(stages_seen):
-        fail(f"llm_calls.jsonl: expected stages {expected}, found {stages_seen}")
+    allowed = {"classification", "reply_generation"}
+    if not stages_seen.issubset(allowed):
+        fail(f"llm_calls.jsonl: stages {stages_seen - allowed} are not in spec-allowed set {allowed}")
+    if not allowed.issubset(stages_seen):
+        fail(f"llm_calls.jsonl: expected to see all of {allowed}, missing {allowed - stages_seen}")
     ok(f"llm_calls.jsonl has {len(calls)} records with valid artifacts; stages seen={sorted(stages_seen)}")
 
     # 9. Optional: confusion summary

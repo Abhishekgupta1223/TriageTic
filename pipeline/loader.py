@@ -15,9 +15,14 @@ def load_tickets(path: Path) -> list[dict[str, Any]]:
             raise ValueError(f"{path}[{i}]: ticket must be a JSON object")
         if "ticket_id" not in t or "customer_message" not in t:
             raise ValueError(f"{path}[{i}]: missing ticket_id or customer_message")
-        if t["ticket_id"] in seen_ids:
-            raise ValueError(f"{path}: duplicate ticket_id {t['ticket_id']!r}")
-        seen_ids.add(t["ticket_id"])
+        tid = t["ticket_id"]
+        if not isinstance(tid, str) or not tid.strip():
+            raise ValueError(f"{path}[{i}]: ticket_id must be a non-empty string, got {tid!r}")
+        if not isinstance(t["customer_message"], str):
+            raise ValueError(f"{path}[{i}]: customer_message must be a string")
+        if tid in seen_ids:
+            raise ValueError(f"{path}: duplicate ticket_id {tid!r}")
+        seen_ids.add(tid)
     return data
 
 

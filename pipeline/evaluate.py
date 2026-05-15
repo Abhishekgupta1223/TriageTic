@@ -8,27 +8,38 @@ def per_ticket_comparison(
     tickets: list[dict[str, Any]],
     predictions: dict[str, dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """One record per ticket, comparing expected vs predicted."""
+    """One record per ticket, comparing expected vs predicted.
+
+    A match is True/False only when BOTH the expected label and the
+    predicted label are present. If either is missing (no ground truth,
+    or parse failure), the match is None and the ticket is excluded
+    from the accuracy denominator in `evaluation_report`. Parse
+    failures are accounted for separately via `parse_validation_failures`.
+    """
     comparison = []
     for t in tickets:
         tid = t["ticket_id"]
         pred = predictions.get(tid, {})
+        expected_cat = t.get("expected_category")
+        expected_urg = t.get("expected_urgency")
+        predicted_cat = pred.get("category")
+        predicted_urg = pred.get("urgency")
         comparison.append(
             {
                 "ticket_id": tid,
-                "expected_category": t.get("expected_category"),
-                "expected_urgency": t.get("expected_urgency"),
-                "predicted_category": pred.get("category"),
-                "predicted_urgency": pred.get("urgency"),
+                "expected_category": expected_cat,
+                "expected_urgency": expected_urg,
+                "predicted_category": predicted_cat,
+                "predicted_urgency": predicted_urg,
                 "category_match": (
-                    t.get("expected_category") == pred.get("category")
-                    if t.get("expected_category") is not None
-                    else None
+                    None
+                    if expected_cat is None or predicted_cat is None
+                    else expected_cat == predicted_cat
                 ),
                 "urgency_match": (
-                    t.get("expected_urgency") == pred.get("urgency")
-                    if t.get("expected_urgency") is not None
-                    else None
+                    None
+                    if expected_urg is None or predicted_urg is None
+                    else expected_urg == predicted_urg
                 ),
             }
         )

@@ -3,14 +3,36 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from typing import Any
 
 from .llm import LLMClient
 from .logging_utils import CallLogger
 
-_JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
+_DECODER = json.JSONDecoder()
+
+
+def _extract_first_json_object(text: str) -> dict[str, Any] | None:
+    """Find the first balanced JSON object in `text`, ignoring any prose around it.
+
+    Uses ``json.JSONDecoder.raw_decode`` to consume a complete JSON value starting
+    at each ``{`` candidate. Returns the first dict it can parse, or None.
+
+    This is strictly better than a regex like ``\\{.*\\}``: the regex is greedy
+    (matches the first ``{`` to the LAST ``}``) and fails on common LLM outputs
+    where there are multiple ``{`` characters in surrounding prose.
+    """
+    idx = text.find("{")
+    while idx != -1:
+        try:
+            obj, _ = _DECODER.raw_decode(text[idx:])
+        except json.JSONDecodeError:
+            idx = text.find("{", idx + 1)
+            continue
+        if isinstance(obj, dict):
+            return obj
+        idx = text.find("{", idx + 1)
+    return None
 
 
 CLASSIFY_SYSTEM = """You are a customer-support triage classifier.
@@ -108,18 +130,15 @@ def _validate_payload(
 
 
 def _try_parse(raw_text: str) -> tuple[dict[str, Any] | None, str | None]:
-    """Try strict JSON, then regex-extract first {...}. Returns (payload, error)."""
+    """Try strict JSON, then extract the first balanced JSON object. Returns (payload, error)."""
     try:
         return json.loads(raw_text), None
     except json.JSONDecodeError as e:
         strict_err = f"strict JSON parse failed: {e}"
-    m = _JSON_OBJECT_RE.search(raw_text)
-    if not m:
-        return None, strict_err + "; no JSON object found in output"
-    try:
-        return json.loads(m.group(0)), None
-    except json.JSONDecodeError as e:
-        return None, strict_err + f"; recovery parse failed: {e}"
+    obj = _extract_first_json_object(raw_text)
+    if obj is not None:
+        return obj, None
+    return None, strict_err + "; no parseable JSON object found in output"
 
 
 def classify_ticket(
@@ -163,12 +182,13 @@ def classify_ticket(
         system=STRICTER_RETRY_SYSTEM, user=user, schema=schema, max_tokens=1024
     )
     logger.log(
-        stage="classification_retry",
+        stage="classification",
         ticket_id=ticket_id,
         provider=client.provider,
         model=client.model,
         prompt=STRICTER_RETRY_SYSTEM + "\n---\n" + user,
         raw_output=raw_response2,
+        suffix="retry",
     )
     payload2, parse_err2 = _try_parse(raw_text2)
     if payload2 is not None:

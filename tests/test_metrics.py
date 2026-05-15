@@ -65,6 +65,37 @@ def test_evaluation_handles_missing_expected_fields():
     assert report["category_accuracy"] == 1.0
 
 
+def test_parse_failures_excluded_from_accuracy_denominator():
+    """A ticket whose classification failed to parse has no prediction
+    in the `predictions` dict. The match must be None (not False), so
+    `evaluation_report` excludes it from the accuracy denominator instead
+    of double-penalizing it (it's already counted in `parse_validation_failures`).
+    """
+    tickets = [
+        {"ticket_id": "T1", "expected_category": "billing", "expected_urgency": "high"},
+        {"ticket_id": "T2", "expected_category": "billing", "expected_urgency": "high"},
+    ]
+    # T2 has no entry in predictions = simulated parse failure
+    predictions = {
+        "T1": {"category": "billing", "urgency": "high"},
+    }
+    comparison = per_ticket_comparison(tickets, predictions)
+    by_id = {c["ticket_id"]: c for c in comparison}
+    assert by_id["T1"]["category_match"] is True
+    assert by_id["T2"]["category_match"] is None  # NOT False
+    assert by_id["T2"]["urgency_match"] is None
+
+    routing = [
+        {"ticket_id": "T1", "route": "auto_triage", "confidence": 0.9, "routing_reason": ""},
+        {"ticket_id": "T2", "route": "human_review", "confidence": 0.0, "routing_reason": "parse_failed"},
+    ]
+    report = evaluation_report(comparison, routing, parse_failures=1)
+    # Only T1 in denominator; accuracy is 1/1 = 1.0, not 1/2 = 0.5
+    assert report["category_compared"] == 1
+    assert report["category_accuracy"] == 1.0
+    assert report["parse_validation_failures"] == 1
+
+
 def test_confusion_summary_groups_mispredictions():
     tickets = [
         {"ticket_id": "T1", "expected_category": "billing", "expected_urgency": "high"},

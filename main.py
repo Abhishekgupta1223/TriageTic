@@ -28,7 +28,7 @@ from pipeline.loader import load_schema, load_tickets
 from pipeline.logging_utils import CallLogger
 from pipeline.preprocess import preprocess_all
 from pipeline.reply import generate_customer_reply, generate_internal_note
-from pipeline.routing import DEFAULT_CONFIDENCE_THRESHOLD, route
+from pipeline.routing import DEFAULT_CONFIDENCE_THRESHOLD, RoutingDecision, route
 from pipeline.stages import PipelineStage, StageTracker
 
 
@@ -90,14 +90,29 @@ def run(args: argparse.Namespace) -> int:
         tid = p["ticket_id"]
         cleaned = p["cleaned_text"]
         print(f"[classify] {tid}", flush=True)
-        parsed = classify_ticket(
-            client=client,
-            logger=logger,
-            ticket_id=tid,
-            cleaned_text=cleaned,
-            categories=schema["categories"],
-            urgency_levels=schema["urgency_levels"],
-        )
+        try:
+            parsed = classify_ticket(
+                client=client,
+                logger=logger,
+                ticket_id=tid,
+                cleaned_text=cleaned,
+                categories=schema["categories"],
+                urgency_levels=schema["urgency_levels"],
+            )
+        except Exception as e:
+            # Spec: "Invalid or malformed model outputs must not crash the pipeline."
+            # Extend that guarantee to API / network errors so one bad call doesn't
+            # take the whole batch down. Mark as a parse failure -> routes to review.
+            print(f"[classify] {tid}: API ERROR -> {type(e).__name__}: {e}", flush=True)
+            parsed = ParsedClassification(
+                category="",
+                urgency="",
+                confidence=0.0,
+                reasoning_summary="",
+                needs_human_review=True,
+                parse_path="failed",
+                parse_error=f"api_error: {type(e).__name__}: {e}",
+            )
         classifications[tid] = parsed
         if parsed.parse_path == "failed":
             parse_failures += 1
@@ -126,27 +141,80 @@ def run(args: argparse.Namespace) -> int:
     for tid, parsed in classifications.items():
         decision = decisions[tid]
         cleaned = text_by_id[tid]
-        customer_reply = None
-        internal_note = None
+        customer_reply: str | None = None
+        internal_note: str | None = None
         if decision.route == "auto_triage":
             print(f"[reply] {tid}: customer reply", flush=True)
-            customer_reply = generate_customer_reply(
-                client=client,
-                logger=logger,
-                ticket_id=tid,
-                cleaned_text=cleaned,
-                parsed=parsed,
-            )
+            try:
+                customer_reply = generate_customer_reply(
+                    client=client,
+                    logger=logger,
+                    ticket_id=tid,
+                    cleaned_text=cleaned,
+                    parsed=parsed,
+                )
+            except Exception as e:
+                # Reply generation failed -> downgrade this ticket to human_review so
+                # the spec contract ("auto_triage tickets have a customer reply") holds.
+                # Rewrite both the routing decision and the in-memory record.
+                print(
+                    f"[reply] {tid}: reply generation FAILED -> {type(e).__name__}: {e}; "
+                    "downgrading to human_review",
+                    flush=True,
+                )
+                decision = RoutingDecision(
+                    ticket_id=tid,
+                    route="human_review",
+                    confidence=decision.confidence,
+                    routing_reason=f"reply_generation_failed: {type(e).__name__}: {e}",
+                )
+                decisions[tid] = decision
+                for r in routing_decisions:
+                    if r["ticket_id"] == tid:
+                        r["route"] = decision.route
+                        r["routing_reason"] = decision.routing_reason
+                        break
+                try:
+                    internal_note = generate_internal_note(
+                        client=client,
+                        logger=logger,
+                        ticket_id=tid,
+                        cleaned_text=cleaned,
+                        parsed=parsed,
+                        decision=decision,
+                    )
+                except Exception as e2:
+                    internal_note = (
+                        f"Both reply and internal-note generation failed. "
+                        f"Original error: {type(e).__name__}: {e}. "
+                        f"Note error: {type(e2).__name__}: {e2}. "
+                        "Please write a reply manually."
+                    )
+                customer_reply = None
         else:
             print(f"[reply] {tid}: internal note", flush=True)
-            internal_note = generate_internal_note(
-                client=client,
-                logger=logger,
-                ticket_id=tid,
-                cleaned_text=cleaned,
-                parsed=parsed,
-                decision=decision,
-            )
+            try:
+                internal_note = generate_internal_note(
+                    client=client,
+                    logger=logger,
+                    ticket_id=tid,
+                    cleaned_text=cleaned,
+                    parsed=parsed,
+                    decision=decision,
+                )
+            except Exception as e:
+                # Synthesize a non-empty note locally so the spec contract holds even if
+                # the second LLM call fails.
+                print(
+                    f"[reply] {tid}: internal-note generation FAILED -> "
+                    f"{type(e).__name__}: {e}; using fallback note",
+                    flush=True,
+                )
+                internal_note = (
+                    f"Auto-generated fallback. Routing reason: {decision.routing_reason}. "
+                    f"LLM internal-note call failed: {type(e).__name__}: {e}. "
+                    "Human reviewer: please assess this ticket manually."
+                )
         triage_results.append(
             {
                 "ticket_id": tid,
@@ -158,6 +226,8 @@ def run(args: argparse.Namespace) -> int:
                 "internal_note": internal_note,
             }
         )
+    # Persist the (possibly downgraded) routing decisions so they reflect final state.
+    _write_json(out_dir / "routing_decisions.json", routing_decisions)
     tracker.advance(PipelineStage.RESPONSE_GENERATED, "replies and notes generated")
 
     # Stage: RESULTS_SAVED
